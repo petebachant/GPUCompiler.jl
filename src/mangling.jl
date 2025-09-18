@@ -181,5 +181,18 @@ function mangle_sig(sig)
         str *= mangle_param(t, substitutions, true)
     end
 
-    return str
+    uninteresting_modules = [:Base, :Core, :GPUCompiler, :CUDA, :NVTX, :ClimaCoreCUDAExt, :ClimaCore]
+    stack = stacktrace()
+    first_relevant_index = findfirst(stack) do frame
+        frame.linfo isa Core.MethodInstance && (fullname(frame.linfo.def.module)[1] ∉ uninteresting_modules)
+    end
+    if !isnothing(first_relevant_index)
+        frame = stack[first_relevant_index]
+        # @info "For " * string(frame.func) * ", fullname is " * string(fullname(frame.linfo.def.module))
+        rfn = string(frame.func) * "_line" * string(frame.linfo.def.file) * string(frame.line)
+        name_str = rfn * "_Mangled_" * string(length(str))
+        return safe_name(name_str)
+    else
+        return str
+    end
 end
