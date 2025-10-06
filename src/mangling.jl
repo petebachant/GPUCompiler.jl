@@ -181,18 +181,91 @@ function mangle_sig(sig)
         str *= mangle_param(t, substitutions, true)
     end
 
-    uninteresting_modules = [:Base, :Core, :GPUCompiler, :CUDA, :NVTX, :ClimaCoreCUDAExt, :ClimaCore]
-    stack = stacktrace()
-    first_relevant_index = findfirst(stack) do frame
-        frame.linfo isa Core.MethodInstance && (fullname(frame.linfo.def.module)[1] ∉ uninteresting_modules)
+    # Stack-trace based kernel naming is optional. Users can enable it via
+    # the environment variable `GPU_COMPILER_MANGLE_STACK_TRACE` (truthy values:
+    # "1", "true", "yes", "on"). The list of modules to ignore when
+    # searching the stack can be provided via
+    # `GPU_COMPILER_MANGLE_IGNORED_MODULES` (comma-separated symbols), or set
+    # programmatically using `set_mangle_ignored_modules!`.
+    if get_mangle_stacktrace()
+        ignored = get_mangle_ignored_modules()
+        stack = stacktrace()
+        first_relevant_index = findfirst(stack) do frame
+            frame.linfo isa Core.MethodInstance && (fullname(frame.linfo.def.module)[1] ∉ ignored)
+        end
+        if !isnothing(first_relevant_index)
+            frame = stack[first_relevant_index]
+            # @info "For " * string(frame.func) * ", fullname is " * string(fullname(frame.linfo.def.module))
+            rfn = string(frame.func) * "_line" * string(frame.linfo.def.file) * string(frame.line)
+            name_str = rfn * "_Mangled_" * string(length(str))
+            return safe_name(name_str)
+        end
     end
-    if !isnothing(first_relevant_index)
-        frame = stack[first_relevant_index]
-        # @info "For " * string(frame.func) * ", fullname is " * string(fullname(frame.linfo.def.module))
-        rfn = string(frame.func) * "_line" * string(frame.linfo.def.file) * string(frame.line)
-        name_str = rfn * "_Mangled_" * string(length(str))
-        return safe_name(name_str)
-    else
-        return str
-    end
+
+    return str
 end
+
+
+# ------------------------------
+# Configurable behavior (env var + programmatic setters)
+# ------------------------------
+
+const _MANGLE_STACKTRACE = Ref{Bool}(false)
+const _MANGLE_IGNORED_MODULES = Ref{Vector{Symbol}}([
+    :Base,
+    :Core,
+    :GPUCompiler,
+    :CUDA,
+    :NVTX,
+])
+
+function _parse_env_bool(key::AbstractString, default::Bool=false)
+    if !haskey(ENV, key)
+        return default
+    end
+    v = lowercase(strip(ENV[key]))
+    return v in ("1", "true", "yes", "on")
+end
+
+function _parse_ignored_modules_env(key::AbstractString)
+    if !haskey(ENV, key)
+        return nothing
+    end
+    s = ENV[key]
+    parts = split(s, r"[,;\s]+")
+    syms = Symbol.(filter(x->!isempty(x), strip.(parts)))
+    return syms
+end
+
+# initialize from environment at load time
+_MANGLE_STACKTRACE[] = _parse_env_bool("GPU_COMPILER_MANGLE_STACK_TRACE", false)
+mods = _parse_ignored_modules_env("GPU_COMPILER_MANGLE_IGNORED_MODULES")
+if mods !== nothing && !isempty(mods)
+    _MANGLE_IGNORED_MODULES[] = mods
+end
+
+"""
+Enable or disable stack-trace based mangled names. Accepts a Bool.
+This can also be toggled via the `GPU_COMPILER_MANGLE_STACK_TRACE` environment
+variable.
+"""
+function set_mangle_stacktrace!(b::Bool)
+    _MANGLE_STACKTRACE[] = b
+    return nothing
+end
+
+"""Return whether stack-trace based mangling is enabled."""
+get_mangle_stacktrace() = _MANGLE_STACKTRACE[]
+
+"""Set the modules (Symbols) that should be ignored when searching the
+stacktrace for a human-meaningful frame. Example: `[:Base, :MyLib]`.
+This can also be set via `GPU_COMPILER_MANGLE_IGNORED_MODULES` environment
+variable (comma/space/semicolon-separated list).
+"""
+function set_mangle_ignored_modules!(mods::Vector{Symbol})
+    _MANGLE_IGNORED_MODULES[] = copy(mods)
+    return nothing
+end
+
+"""Get the current ignored-modules list (Vector{Symbol})."""
+get_mangle_ignored_modules() = _MANGLE_IGNORED_MODULES[]
