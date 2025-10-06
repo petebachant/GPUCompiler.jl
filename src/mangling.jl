@@ -190,24 +190,12 @@ function mangle_sig(sig)
     if get_mangle_stacktrace()
         ignored = get_mangle_ignored_modules()
         stack = stacktrace()
-        # Choose the last relevant frame (closest to user code / earliest in the
-        # stack) rather than the first. This avoids picking frames inside the
-        # mangling implementation itself (which can appear near the top).
-        first_relevant_index = findlast(stack) do frame
-            if !(frame.linfo isa Core.MethodInstance)
-                false
-            else
-                modsym = fullname(frame.linfo.def.module)[1]
-                fname = string(frame.func)
-                file = string(frame.linfo.def.file)
-
-                # skip frames from ignored modules, or internal mangling
-                # implementation frames (function name or source file)
-                (modsym ∉ ignored) && (fname != "mangle_sig") && !occursin("mangling.jl", file)
-            end
+        first_relevant_index = findfirst(stack) do frame
+            frame.linfo isa Core.MethodInstance && (fullname(frame.linfo.def.module)[1] ∉ ignored)
         end
         if !isnothing(first_relevant_index)
             frame = stack[first_relevant_index]
+            # @info "For " * string(frame.func) * ", fullname is " * string(fullname(frame.linfo.def.module))
             rfn = string(frame.func) * "_line" * string(frame.linfo.def.file) * string(frame.line)
             name_str = rfn * "_Mangled_" * string(length(str))
             return safe_name(name_str)
